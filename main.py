@@ -37,7 +37,7 @@ if __name__ == '__main__':
 
 
     # ### 计算推荐库位，将分析结果写入excel文件
-    df = calculate_single_location(df, file_path)
+    inventory_analysis(df, file_path)
     sku_pivot = get_sku_pivot(df)
 
 
@@ -47,10 +47,10 @@ if __name__ == '__main__':
     outbound_file_name = '出库数据_美东8仓.csv'
     time_file_name = '出库时间_美东8仓.csv'
 
-    ob_df = load_outbound_data(file_path, outbound_file_name, time_file_name)
+    ob_df, ob_source_info = load_outbound_data(file_path, outbound_file_name, time_file_name)
 
 
-    outbound_analyse(ob_df, file_path, customer_pivot, sku_pivot)
+    outbound_analyse(ob_df, file_path, customer_pivot, sku_pivot, ob_source_info)
 
 
     '''入库分析'''
@@ -72,14 +72,7 @@ if __name__ == '__main__':
 
 
 
-# if __name__ == '__main__':
-#     app = QApplication(sys.argv)
-#     mainWindow = QMainWindow()
-#     ui = company.Ui_MainWindow()
-#     # 向主窗口上添加控件
-#     ui.setupUi(mainWindow)
-#     mainWindow.show()
-#     sys.exit(app.exec_())
+
 
 
 

@@ -2,7 +2,7 @@
 # @File   : outbound
 # @Time   : 2022/02/15 13:58 
 # @Author : BCY
-
+import pandas as pd
 
 from inventory import *
 
@@ -16,12 +16,15 @@ def input_column_index():
 
 
 def load_outbound_data(file_path, order_file_name, time_file_name, sku_df=None):
-    '''
+    """
     从本地路径导入原始数据
-    :param inventory_fileName: 完整的路径+文件名
-    :return: 原始数据的dataframe形式
-    '''
-    # import inBound and outBound order detail source data
+    :param file_path: 文件路径
+    :param order_file_name: 订单明细数据
+    :param time_file_name: 订单流入时间明细数据
+    :param sku_df: sku基础信息
+    :return:
+    """
+    # import outbound order detail source data
     if '.xlsx' in order_file_name:
         data = pd.read_excel('{}{}'.format(file_path, order_file_name))
     else:
@@ -35,10 +38,10 @@ def load_outbound_data(file_path, order_file_name, time_file_name, sku_df=None):
     ### 交互界面，输入EIQ分析的有效字段编号
     print('\n')
     print('请按以下字段顺序输入 订单明细 对应的列号：（列号从0开始，以空格隔开enter结束）')
-    print('日期 订单号 产品代码 产品货型 件数 订单类型标识(是否FBA) 上架时间')
+    print('日期 订单号 产品代码 产品货型 件数 订单类型标识(是否FBA) 上架时间 拣货单号 库位代码')
 
     # column_index = [int(x) for x in input().split()]
-    detail_index = [0, 5, 9, 10, 12, 4, 2]
+    detail_index = [0, 5, 9, 10, 12, 4, 2, 3, 8]
     column_name = data.columns.tolist()
 
     # print('column_index: ', detail_index)
@@ -50,7 +53,7 @@ def load_outbound_data(file_path, order_file_name, time_file_name, sku_df=None):
     # print('detail_columns: ', detail_columns)
 
     detail_data = data[detail_columns]
-    valid_columns_name = ['date', 'orderID', 'sku', 'sku_size', 'quantity', 'order_tag', 'putaway_date']
+    valid_columns_name = ['date', 'orderID', 'sku', 'sku_size', 'quantity', 'order_tag', 'putaway_date', 'pickupNO', 'location']
     detail_data.columns = valid_columns_name
 
     date_col = []
@@ -78,6 +81,8 @@ def load_outbound_data(file_path, order_file_name, time_file_name, sku_df=None):
     print('\n')
     print('*' * 10, '原始数据', '*' * 10)
     print('行数： ', detail_data.shape[0], '\t列数： ', detail_data.shape[1])
+
+    outbound_source_info = '数据源\n 原始数据: 行数 {}, \t列数 {}'.format(detail_data.shape[0], detail_data.shape[1])
 
     ''' 数据清洗 '''
     '''
@@ -109,6 +114,8 @@ def load_outbound_data(file_path, order_file_name, time_file_name, sku_df=None):
     print('\n')
     print('*' * 10, '数据清洗后', '*' * 10)
     print('行数： ', detail_data.shape[0], '\t列数： ', detail_data.shape[1])
+
+    outbound_source_info  = outbound_source_info + '\n 数据清洗后: 行数: {}, \t列数: {}'.format(detail_data.shape[0], detail_data.shape[1])
 
     ''' import outBound order synchronize time source data '''
 
@@ -154,17 +161,20 @@ def load_outbound_data(file_path, order_file_name, time_file_name, sku_df=None):
     print(re.dtypes)
     print(re.head(10))
 
-    return re
+    return re, outbound_source_info
 
 
-def outbound_analyse(df, output_path, inv_customer_df, inv_sku_df):
+def outbound_analyse(df, output_path, inv_customer_df, inv_sku_df, outbound_source_info):
     ## GC数据 更新订单类型
     df.loc[(df['order_tag'] == '是'), ['order_tag']] = 'FBA订单'
-    df.loc[(df['order_tag'] == '否'), ['order_tag']] = '普通订单'
+    df.loc[(df['order_tag'] == '否'), ['order_tag']] = '标准订单'
 
-    ##
+    ###
     print('*' * 30)
-    # print(df.head(10))
+    print(df.columns)
+
+    ### outbound source information
+
 
     df_order = pd.pivot_table(df, index=['orderID'], values=['sku', 'quantity'], aggfunc={'sku': len, 'quantity': np.sum}).reset_index()
     ## 根据订单的行数和件数更新订单结构
@@ -183,6 +193,8 @@ def outbound_analyse(df, output_path, inv_customer_df, inv_sku_df):
     dict = {'XS': '小', 'S': '小', 'M': '中', 'L1': '大', 'L2': '大', 'XL': 'XL'}
 
     temp_df_order_size['size_type'] = temp_df_order_size['sku_size'].map(dict)
+    sort_size = ['小', '中', '大', 'XL']
+    temp_df_order_size['size_type'] = pd.Categorical(temp_df_order_size['size_type'], sort_size)
 
     df_order_size = temp_df_order_size[['orderID', 'size_type']].groupby('orderID')['size_type'].agg('-'.join).reset_index()
 
@@ -206,14 +218,36 @@ def outbound_analyse(df, output_path, inv_customer_df, inv_sku_df):
     df_order_size.loc[
         (df_order_size['size_type'].str.contains('小')) & ~(df_order_size['size_type'].str.contains('中')) & ~(df_order_size['size_type'].str.contains('大')), 'order_type'] = '小'
 
-    df_order_size.loc[(df_order_size['size_type'].str.contains('XL')), 'order_type'] = 'XL订单'
-    # print(df_order_size.head(10))
+    df_order_size.loc[(df_order_size['size_type'].str.contains('XL')), 'order_type'] = 'XL'
+
+    # order_size 按指定顺序排列
+    order_type_sorted = ['小', '中', '大', '中配小', '大配小', '大配中', '大中小', 'XL']
+    df_order_size['order_type'] = pd.Categorical(df_order_size['order_type'], order_type_sorted)
+
+
+    # df_order_size = pd.pivot_table(temp_df_order_size, index=['orderID'],
+    #                                values=['size_type'],
+    #                                columns=['size_type'],
+    #                                fill_value=0).reset_index()
+    #
+    # ### 多级索引转成单层索引
+    # col = []
+    # for (s1, s2) in df_order_size.columns:
+    #     if len(s2) > 0:
+    #         col.append(s1 + '_' + str(s2))
+    #     else:
+    #         col.append(s1)
+    # df_order_size.columns = col
+
+
+
 
     '''合并 订单明细数据 和 订单货型数据'''
     df = pd.merge(df, df_order_size, on=['orderID'], how='left')
 
     df['month'] = df.date.dt.month
     df['week'] = df.date.dt.week
+    df['weekday'] = df.date.dt.weekday + 1  # 内置0~6的序列表示星期一到星期日，为引起歧义修改为1~7
     df['hour'] = df.time_in.dt.hour
 
     df['wave'] = 'Wave1'
@@ -222,9 +256,8 @@ def outbound_analyse(df, output_path, inv_customer_df, inv_sku_df):
     '''
     订单EIQ分析，输入参数
     '''
-    normal_order = '普通订单'
+    normal_order = '标准订单'
     fba_order = 'FBA订单'
-    wave_date = '2022-01-01'
 
     '''
     B1 订单结构
@@ -234,25 +267,27 @@ def outbound_analyse(df, output_path, inv_customer_df, inv_sku_df):
     print(df.dtypes)
     print(df.head(10))
 
-    ### 周维度  FBA与普通订单分开
-    week_index = ['week']
+    '''标准订单EIQ'''
+    order_index = ['order_tag']
     df_normal = df.query('order_tag == "{}"'.format(normal_order))
-    normal_order_week_EIQ = get_EIQ(df=df_normal, index=week_index)
+    normal_order_EIQ = get_EIQ(df=df_normal, index=order_index)
 
+    '''FBA订单EIQ'''
     df_fba = df.query('order_tag == "{}"'.format(fba_order))
-    fba_order_week_EIQ = get_EIQ(df=df_fba, index=week_index)
+    fba_order_EIQ = get_EIQ(df=df_fba, index=order_index)
 
-    ### 订单结构EIQ
+    '''订单结构EIQ'''
     order_index = ['order_tag', 're_order_structure']
-    order_type_EIQ = get_EIQ(df=df_normal, index=order_index)
+    order_type_EIQ = get_EIQ(df=df_normal, index=order_index, isPercentage=True)
 
     # print('\n')
     # print('*'*10, '订单结构维度的EIQ', '*'*10)
     # print(order_type_EIQ)
 
-    ### 波次EIQ
-    wave_index = ['date', 'wave', 're_order_structure']
-    df_wave = df.query('date == "{}"'.format(wave_date))
+    '''波次EIQ'''
+    wave_index = ['wave', 're_order_structure']
+    wave_date = '2022-01-01'
+    df_wave = df.query('date >= "{}"'.format(wave_date))
     df_wave['date'] = df_wave['date'].astype(np.str)  # datetime64[ns] can't be the merge index
 
     wave_order_type_EIQ = get_EIQ(df=df_wave, index=wave_index)
@@ -260,7 +295,11 @@ def outbound_analyse(df, output_path, inv_customer_df, inv_sku_df):
     # print('*' * 10, 'wave_order_type_EIQ', '*' * 10)
     # print(wave_order_type_EIQ)
 
-    ### 多品多件订单货型组合
+    '''现状拣选行EIQ'''
+    current_index = ['order_tag']
+    current_pick_order_EIQ = get_pick_EIQ(df=df_normal, index=current_index)
+
+    '''多品多件订单货型组合'''
     df_multi_order = df.query('re_order_structure == "{}"'.format('多品多件'))
     multi_index = ['order_tag', 're_order_structure', 'order_type']
     multi_order_EIQ = order_distribution(df=df_multi_order, index=multi_index)
@@ -286,7 +325,7 @@ def outbound_analyse(df, output_path, inv_customer_df, inv_sku_df):
     B5 ABC分类
     '''
     abc_col = ['date', 'sku', 'quantity', 'sku_age']
-    abc_df, sku_source_df = get_ABC_class(df[abc_col], inv_sku_df)
+    abc_df, sku_source_df, data_info = get_ABC_class(df[abc_col], inv_sku_df)
     # print(abc_df.dtypes)
     # print(abc_df.head(10))
 
@@ -323,88 +362,164 @@ def outbound_analyse(df, output_path, inv_customer_df, inv_sku_df):
     str_time = time.strftime('%Y_%m_%d_%H_%M')
     writer = pd.ExcelWriter('{}出库分析_{}.xlsx'.format(output_path, str_time))
 
-    format_data(writer=writer, df=normal_order_week_EIQ, sheet_name='B1.1-周EIQ')
-    format_data(writer=writer, df=fba_order_week_EIQ, sheet_name='B1.2-FBA EIQ')
-    format_data(writer=writer, df=order_type_EIQ, sheet_name='B1.3-订单结构EIQ')
-    format_data(writer=writer, df=wave_order_type_EIQ, sheet_name='B1.4-波次EIQ')
-    format_data(writer=writer, df=multi_order_EIQ, sheet_name='B1.5-多品订单组合')
+    format_data(writer=writer, df=normal_order_EIQ, sheet_name='B1.1-标准订单EIQ', source_data_info=outbound_source_info)
+    format_data(writer=writer, df=fba_order_EIQ, sheet_name='B1.2-FBA EIQ', source_data_info=outbound_source_info)
+    format_data(writer=writer, df=order_type_EIQ, sheet_name='B1.3-订单结构EIQ', source_data_info=outbound_source_info)
+    format_data(writer=writer, df=wave_order_type_EIQ, sheet_name='B1.4-波次EIQ', source_data_info=outbound_source_info)
+    format_data(writer=writer, df=current_pick_order_EIQ, sheet_name='B1.5-拣货EIQ', source_data_info=outbound_source_info)
+    format_data(writer=writer, df=multi_order_EIQ, sheet_name='B1.6-多品订单组合', source_data_info=outbound_source_info)
 
-    format_data(writer=writer, df=customer_df, sheet_name='B2-客户动销')
+    format_data(writer=writer, df=customer_df, sheet_name='B2-客户动销', source_data_info=outbound_source_info)
 
-    format_data(writer=writer, df=active_sku_df, sheet_name='B3-SKU动销')
+    format_data(writer=writer, df=active_sku_df, sheet_name='B3-SKU动销', source_data_info=outbound_source_info)
 
-    format_data(writer=writer, df=hour_in_sku_df, sheet_name='B4-SKU小时流入')
+    format_data(writer=writer, df=hour_in_sku_df, sheet_name='B4-SKU小时流入', source_data_info=outbound_source_info)
 
-    format_data(writer=writer, df=abc_df, sheet_name='B5.1-ABC分类')
-    format_data(writer=writer, df=sku_source_df, sheet_name='B5.2-SKU ABC分类明细')
+    format_data(writer=writer, df=abc_df, sheet_name='B5.1-ABC分类', source_data_info=outbound_source_info+data_info)
+    format_data(writer=writer, df=sku_source_df, sheet_name='B5.2-SKU ABC分类明细', source_data_info=outbound_source_info+data_info)
 
-    format_data(writer=writer, df=sku_age_df, sheet_name='B6.1-SKU出库库龄')
-    format_data(writer=writer, df=order_age_df, sheet_name='B6.2-订单出库库龄')
+    format_data(writer=writer, df=sku_age_df, sheet_name='B6.1-SKU出库库龄', source_data_info=outbound_source_info)
+    format_data(writer=writer, df=order_age_df, sheet_name='B6.2-订单出库库龄', source_data_info=outbound_source_info)
 
-    format_data(writer=writer, df=channel_order_distribution, sheet_name='B7.1-渠道分布')
-    format_data(writer=writer, df=platform_order_distribution, sheet_name='B7.2-平台分布')
+    format_data(writer=writer, df=channel_order_distribution, sheet_name='B7.1-渠道分布', source_data_info=outbound_source_info)
+    format_data(writer=writer, df=platform_order_distribution, sheet_name='B7.2-平台分布', source_data_info=outbound_source_info)
 
     writer.save()
 
 
-def get_EIQ(df, index):
-    EIQ_re = pd.pivot_table(df, index=index,
-                            values=['orderID', 'sku', 'sku_size', 'quantity'],
-                            aggfunc={'orderID': pd.Series.nunique, 'sku': pd.Series.nunique, 'sku_size': len, 'quantity': sum},
-                            margins=True,
-                            margins_name='总计',
+def get_EIQ(df, index=None, isPercentage=False):
+
+    ### EIQ的最小单位为日期
+    if index is None:
+        pt_index = ['month', 'week', 'weekday', 'date']
+    else:
+        pt_index = ['month', 'week', 'weekday', 'date'] + index
+
+    date_EIQ = pd.pivot_table(df, index=pt_index,
+                            values=['orderID', 'quantity', 'sku', 'sku_size', ],
+                            aggfunc={'orderID': pd.Series.nunique, 'quantity': sum, 'sku': pd.Series.nunique, 'sku_size': len},
                             fill_value=0).reset_index()
 
-    EIQ_re.columns = index + ['order', 'qty', 'sku', 'line']
+    # print('date_EIQ columns: ', date_EIQ.columns)
 
-    order_columns = ['order', 'sku', 'line', 'qty']
-
-    EIQ_re = EIQ_re[index + order_columns]
+    date_EIQ.columns = pt_index + ['order', 'qty', 'sku', 'line']
 
     # 按index的维度，增加均值和峰值
     order_columns = ['order', 'sku', 'line', 'qty']
-    EIQ_re.columns = index + order_columns
+    # eiq_col = ['EN', 'EQ', 'IK', 'IQ']
 
-    new_line = EIQ_re[:0].copy()  # 复制dataframe数据结构
-    avg_value = [EIQ_re[col].mean() for col in order_columns]
-    max_value = [EIQ_re[col].max() for col in order_columns]
+    date_EIQ = date_EIQ[pt_index + order_columns]
+    date_EIQ = date_EIQ.sort_values(by=['date']+index)
+
+    ### 汇总的维度
+    marge_index= pt_index[-1]
+
+    avg_value = date_EIQ.groupby(marge_index)[order_columns].mean().reset_index()
+    avg_value['date'] = 'Average'
+
+
+    max_value = date_EIQ.groupby(marge_index)[order_columns].max().reset_index()
+    max_value['date'] = 'Max'
+
 
     # 日均值行
-    end_row = 0
-    new_line.loc[end_row, index[0:1]] = 'Average'
-    new_line.loc[end_row, order_columns] = avg_value
+    date_EIQ = pd.concat([date_EIQ, avg_value], ignore_index=True)
 
     # 日峰值行
-    end_row += 1
-    new_line.loc[end_row, index[0:1]] = 'Max'
-    new_line.loc[end_row, order_columns] = max_value
+    date_EIQ = pd.concat([date_EIQ, max_value], ignore_index=True)
 
-    # 峰均比行
-    end_row += 1
-    new_line.loc[end_row, index[0:1]] = 'Max/Avg'
-    new_line.loc[end_row, order_columns] = [1.00 * EIQ_re[col].max() / EIQ_re[col].mean() for col in order_columns]
+    print(date_EIQ.columns)
+    print(date_EIQ.head(10))
 
-    ### 增加均值、峰值、峰均比到末尾
-    EIQ_re = pd.concat([EIQ_re, new_line], ignore_index=True)
+    ### 计算日维度的EIQ
+    date_EIQ['EN'] = date_EIQ['line'] / date_EIQ['order']
+    date_EIQ['EQ'] = date_EIQ['qty'] / date_EIQ['order']
+    date_EIQ['IK'] = date_EIQ['line'] / date_EIQ['sku']
+    date_EIQ['IQ'] = date_EIQ['line'] / date_EIQ['sku']
 
-    ### 计算EIQ
-    EIQ_re['EN'] = EIQ_re['line'] / EIQ_re['order']
-    EIQ_re['EQ'] = EIQ_re['qty'] / EIQ_re['order']
-    EIQ_re['IK'] = EIQ_re['line'] / EIQ_re['sku']
-    EIQ_re['IQ'] = EIQ_re['line'] / EIQ_re['sku']
+    date_EIQ['qty/line'] = date_EIQ['qty'] / date_EIQ['line']
+    # print('re_EIQ.columns: ', date_EIQ.columns)
 
-    EIQ_re['qty/line'] = EIQ_re['qty'] / EIQ_re['line']
+    if isPercentage:
+        sum_col = ['order', 'sku', 'line', 'qty']
+        date_df = date_EIQ.groupby('date')[sum_col].sum().reset_index()  #sku累加
 
-    return EIQ_re
+        ### sku非重复计数
+        # date_df = pd.pivot_table(df, index=['date'],
+        #                           values=['orderID', 'quantity', 'sku', 'sku_size', ],
+        #                           aggfunc={'orderID': pd.Series.nunique, 'quantity': sum, 'sku': pd.Series.nunique, 'sku_size': len},
+        #                           fill_value=0).reset_index()
+
+        date_df = date_EIQ.groupby('date')[sum_col].sum().reset_index()
+
+        re_sum_col = ['sum_order', 'sum_sku', 'sum_line', 'sum_qty']
+        # 修改日维度的列
+        date_df.columns = ['date'] + re_sum_col
+
+        date_EIQ= pd.merge(date_EIQ, date_df, on='date', how='left')
+        for col in sum_col:
+            date_EIQ[col+'%'] = date_EIQ[col]/date_EIQ['sum_'+col]
+
+        date_EIQ = date_EIQ.drop(re_sum_col, axis=1)  #删除日维度列
+
+    return date_EIQ
+
+
+def get_pick_EIQ(df, index):
+
+    ### EIQ的最小单位为日期
+    if index is None:
+        pt_index = ['month', 'week', 'weekday', 'date']
+    else:
+        pt_index = ['month', 'week', 'weekday', 'date'] + index
+
+    date_EIQ = pd.pivot_table(df, index=pt_index,
+                            values=['orderID', 'quantity', 'sku', 'sku_size', ],
+                            aggfunc={'orderID': pd.Series.nunique, 'quantity': sum, 'sku': pd.Series.nunique, 'sku_size': len},
+                            fill_value=0).reset_index()
+    date_EIQ.columns = pt_index + ['order', 'qty', 'sku', 'line']  # 重命名列
+    order_columns = ['order', 'sku', 'line', 'qty']
+    date_EIQ = date_EIQ[pt_index + order_columns]   # 列重排列
+
+
+    pick_columns = ['date', 'pickupNO', 'location', 'sku']
+    pick_temp = pd.pivot_table(df[pick_columns], index=['date', 'pickupNO'],
+                               values=['location', 'sku'],
+                               aggfunc={'location': pd.Series.nunique, 'sku': pd.Series.nunique},
+                               fill_value=0).reset_index()
+    pick_pt = pd.pivot_table(pick_temp, index=['date'],
+                             values=['location', 'pickupNO', 'sku'],
+                             aggfunc={'location': np.sum, 'pickupNO': len,  'sku': np.sum},
+                             fill_value=0).reset_index()
+    pick_pt.columns = ['date', 'location', 'pickupNO', 'sku_touch_cnt']
+    pick_pt = pick_pt[['date', 'pickupNO', 'location', 'sku_touch_cnt']]
+
+    re_pt = pd.merge(date_EIQ, pick_pt, on='date', how='left')
+
+    # 订单维度EIQ
+    re_pt['EN'] = re_pt['line'] / re_pt['order']
+    re_pt['EQ'] = re_pt['qty'] / re_pt['order']
+    re_pt['IK-order'] = re_pt['line'] / re_pt['sku']          # 订单维度IK
+    re_pt['IK-pick'] = re_pt['location'] / re_pt['sku']       # 拣货维度IK
+    re_pt['IQ'] = re_pt['qty'] / re_pt['sku']
+
+    re_pt['qty/line-order'] = re_pt['qty'] / re_pt['line']       # 订单维度行均件
+    re_pt['qty/line-pick'] = re_pt['qty'] / re_pt['location']    # 拣货维度行均件
+
+    re_pt = re_pt.sort_values(by=pt_index)  # 按透视字段排序
+
+    return re_pt
 
 
 def order_distribution(df, index):
     re = pd.pivot_table(df, index=index,
                         values=['orderID', 'quantity', 'sku', 'sku_size'],  # 行数计数任选一列，此处选择的是sku_size
-                        aggfunc={'orderID': pd.Series.nunique, 'sku': pd.Series.nunique, 'sku_size': len, 'quantity': sum},
+                        aggfunc={'orderID': pd.Series.nunique, 'quantity': sum, 'sku': pd.Series.nunique, 'sku_size': len},
                         margins=True,
                         margins_name='总计',
                         fill_value=0).reset_index()
+
+
 
     re.columns = index + ['order', 'qty', 'sku', 'line']
 
@@ -416,7 +531,7 @@ def order_distribution(df, index):
     for i in range(len(order_columns)):
         re[order_columns[i] + '%'] = re[order_columns[i]] / (re[order_columns[i]].sum() / 2)
 
-    re = re.sort_values(by='order%', ascending=False, ignore_index=True)
+    re = re.sort_values(by=index, ascending=False, ignore_index=True)
 
     return re
 
@@ -437,8 +552,16 @@ def customer_dimension(df, customer_df):
                                   fill_value=0).reset_index()
 
     ### 多级索引转成单层索引
-    customer_qty.columns = [s1 + '_' + str(s2) for (s1, s2) in customer_qty.columns.tolist()]
-    print(customer_qty.head(10))
+    # customer_qty.columns = [s1 + '_' + str(s2) for (s1, s2) in customer_qty.columns.tolist()]
+
+    ### 多级索引转成单层索引
+    cols = []
+    for (s1, s2) in customer_qty.columns:
+        if len(s2) > 0:
+            cols.append(s1 + '_' + str(s2))
+        else:
+            cols.append(s1)
+    customer_qty.columns = cols
 
     order_type = ['单品单件', '单品多件', '多品多件', '批量订单', '总计']
     # 计算日均出库件数
@@ -447,10 +570,7 @@ def customer_dimension(df, customer_df):
         customer_qty.loc[(customer_qty['date_' + order_type[i]]) > 0, ['日均件_' + order_type[i]]] = customer_qty['quantity_' + order_type[i]] / customer_qty[
             'date_' + order_type[i]]
 
-    # print('\n')
-    # print(customer_qty.head(10))
-
-    col = ['customer_', 'quantity_总计', 'date_总计', '日均件_总计', '日均件_单品单件', '日均件_单品多件', '日均件_多品多件', '日均件_批量订单']
+    col = ['customer', 'quantity_总计', 'date_总计', '日均件_总计', '日均件_单品单件', '日均件_单品多件', '日均件_多品多件', '日均件_批量订单']
     re_col = ['customer', '出库总件数', '出库天数', '日均出库件数', '日均件_单品单件', '日均件_单品多件', '日均件_多品多件', '日均件_批量订单']
 
     customer_qty = customer_qty[col]
@@ -461,7 +581,7 @@ def customer_dimension(df, customer_df):
                                values=['date'],
                                aggfunc=pd.Series.nunique).reset_index()
 
-    # 查询月份时期最大的月份
+    # 查询最大的月份
     select_month = 0
     days = 0
     # 选取天数最大的月份
@@ -513,7 +633,7 @@ def customer_dimension(df, customer_df):
     customer_re['sku日动销率'] = customer_re['日均动销sku'] / customer_re['sku数']
     customer_re['sku月动销率'] = customer_re['月动销sku'] / customer_re['sku数']
 
-    customer_re.loc[(customer_re['sku月动销率'] >= 1), ['sku月动销率']] = 1
+    # customer_re.loc[(customer_re['sku月动销率'] >= 1), ['sku月动销率']] = 1
 
     customer_re['库存周期'] = customer_re['在库件数'] / customer_re['日均出库件数']
 
@@ -549,6 +669,7 @@ def sku_active_rate(df, index=None):
             next = k + 1
 
         curr_cnt = len(v)
+        next_cnt = len(sku_dict.get(next, {}))
 
         ### sku交集
         comm_sku_set = v.intersection(sku_dict.get(next, {}))
@@ -568,14 +689,14 @@ def sku_active_rate(df, index=None):
         in_cnt = len(set(sku_dict.get(next, {})).difference(v))
         out_cnt = len(v.difference(sku_dict.get(next, {})))
 
-        sku_cnt.append([curr, next, curr_cnt, comm_cnt, in_cnt, out_cnt, curr_qty, next_qty, curr_comm_qty, next_comm_qty])
+        sku_cnt.append([curr, next, curr_cnt, next_cnt, comm_cnt, in_cnt, out_cnt, curr_qty, next_qty, curr_comm_qty, next_comm_qty])
 
-    sku_col = ['curr_{}'.format(index[-1]), 'next_{}'.format(index[-1]), '当前sku', '重合sku', '流入sku', '流出sku',
+    sku_col = ['curr_{}'.format(index[-1]), 'next_{}'.format(index[-1]), 'curr_sku', 'next_sku', '重合sku', '流入sku', '流出sku',
                'current件数', 'next件数', 'current重合sku件数', 'next重合sku件数']
 
     sku_df = pd.DataFrame(sku_cnt, columns=sku_col)
 
-    sku_df['sku池变化率'] = sku_df['流入sku'] / sku_df['当前sku']
+    sku_df['sku池变化率'] = sku_df['流入sku'] / sku_df['curr_sku']
     sku_df['current重合sku件数%'] = sku_df['current重合sku件数'] / sku_df['current件数']
     sku_df['next重合sku件数%'] = sku_df['next重合sku件数'] / sku_df['next件数']
 
@@ -820,7 +941,7 @@ def get_ABC_class(df, inv_sku_df, period=None, ratio=None, freq=None, interval=N
         sku_interval_day_list = []
         for sku, group in sku_groups:
             group['interval_days'] = pd.to_timedelta(group['date'].shift(-1) - group['date']).dt.days
-            max_interval_days = group['interval_days'].max()
+            max_interval_days = group['interval_days'].max()   # 最大间隔天数
             sku_interval_day_list.append([sku, max_interval_days])
 
         sku_interval_day_df = pd.DataFrame(sku_interval_day_list, columns=['sku', 'max_interval_days'])
@@ -853,33 +974,38 @@ def get_ABC_class(df, inv_sku_df, period=None, ratio=None, freq=None, interval=N
 
         index_ABC = 'combine_ABC'
 
-    print('inventory sku pivot!!!!!!!!!!!!!!')
-    print(inv_sku_df.columns)
-    print(inv_sku_df.shape)
-    print(inv_sku_df.head(10))
+    # print('inventory sku pivot!!!!!!!!!!!!!!')
+    # print(inv_sku_df.columns)
+    # print(inv_sku_df.shape)
+    # print(inv_sku_df.head(10))
 
-    print('outbound sku pivot!!!!!!!!!!!!!!')
-    print(sku_df.columns)
-    print(sku_df['combine_ABC'].value_counts())
+    # print('outbound sku pivot!!!!!!!!!!!!!!')
+    # print(sku_df.columns)
+    # print(sku_df['combine_ABC'].value_counts())
 
     sku_df = pd.merge(sku_df, inv_sku_df, on=['sku'], how='left')
-    print('test！！！！！！！！！！！')
-    print(sku_df.columns)
-    print(sku_df.shape)
+    # print('test！！！！！！！！！！！')
+    # print(sku_df.columns)
+    # print(sku_df.shape)
 
     index = [index_ABC] + ['age_class']
-    print('index: ', index)
     sku_ABC_df = pd.pivot_table(sku_df,
                                 index=index,
                                 values=['ob_quantity', 'inv_quantity', 'sku'],
                                 aggfunc={'ob_quantity': np.sum, 'inv_quantity': np.sum, 'sku': pd.Series.nunique},
                                 margins=True,
                                 fill_value=0).reset_index()
+    # print(sku_ABC_df.dtypes)
+    # print(sku_ABC_df)
 
-    print(sku_ABC_df.dtypes)
-    print(sku_ABC_df)
+    # 计算总出库天数，起止日期
+    total_day = df['date'].nunique()
+    start_date = df['date'].min()
+    end_date = df['date'].max()
 
-    return sku_ABC_df, sku_df
+    data_info  = '\n 出库总天数: {}, \t 开始日期: {}, \t 结束日期： {}'.format(total_day, start_date, end_date)
+
+    return sku_ABC_df, sku_df, data_info
 
 
 def outbound_age(df):

@@ -2,18 +2,17 @@
 # @File   : PalletizeDemo
 # @Time   : 2022/04/14 14:23 
 # @Author : BCY
+import os.path
 
 import numpy as np
 import pandas as pd
 
 import sys
-from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
-from palletizeUI import Ui_MainWindow
 from PyQt5.QtWidgets import QMainWindow, QApplication, QMessageBox, QStatusBar
 from PyQt5.QtCore import QAbstractTableModel, Qt
-# from palletize import Ui_MainWindow
+from palletize import Ui_MainWindow
 
 
 from matplotlib import pyplot as plt #设置图表刻度等格式
@@ -39,7 +38,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.setWindowTitle('垛型分析')
 
 
-        self.statusBar.showMessage('仓储管理部-规划实施部')
+        self.statusBar.showMessage('谷仓-仓储管理部-规划实施部')
+        self.statusBar.addPermanentWidget(QLabel("垛型分析V1.0"), stretch=0)  # 比例
+        # self.statusBar.addPermanentWidget(self.show_2, stretch=0)
+
 
         self.df = pd.DataFrame()
 
@@ -58,7 +60,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
 
 
-
     def calculateSingle(self):
         '''
         计算单个箱规的码垛方式
@@ -72,7 +73,20 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             W = int(self.plt_width.text())   # 托盘宽
             H = int(self.plt_height.text())  # 托盘高
 
+            plt_l_gap = int(self.plt_l_gap.text())  # 托盘长边距
+            plt_w_gap = int(self.plt_w_gap.text())  # 托盘宽边距
+
+            # 可码垛区域为原始边长 - 边缘长度
+            L = L - plt_l_gap
+            W = W - plt_w_gap
+
+            l = int(self.ctn_length.text())  # 箱长
+            w = int(self.ctn_width.text())   # 箱宽
             h = int(self.ctn_height.text())  # 箱高
+
+            # # 若箱间距不为0， 则更新箱子码垛后的长度
+            # ctn_gap = int(self.ctn_gap.text())  # 箱间距
+
 
             # print('pallet L, W, H: ', L, W, H)
             # print('carton L, W, H: ', l, w, h)
@@ -80,7 +94,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             num1 = self.get_layer(L, W)  # method 1
             num2 = self.get_layer(W, L)  # method 2
 
-            layer = np.floor(H/h)
+            layer = int(H/h)
 
             print('每层箱数：', num1, num2)
             print('层数：', layer)
@@ -91,7 +105,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
             print('托规箱数为 ', plt_carton)
 
-            msg1 = '码垛方式：\n每层箱数: {}\t层数: {}\t托规: {}'.format(max_num, layer, plt_carton)
+            ctn_vol = l*w*h
+            plt_vol = L*W*H
+
+            pallet_height = layer * h
+            height_ratio = pallet_height/H
+            ratio = plt_carton*ctn_vol/plt_vol
+
+            msg1 = '码垛方式: \n 每层箱数:{} \t层数:{} \n 码托高度:{} \t高度利用率:{:.2%} \n 托规(箱):{} \t码托利用率:{:.2%} '.format(max_num, layer, pallet_height, height_ratio, plt_carton, ratio)
 
             self.resultText1.setText(msg1)
 
@@ -107,6 +128,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             W = int(self.plt_width.text())  # 托盘宽
             H = int(self.plt_height.text())  # 托盘高
 
+            plt_l_gap = int(self.plt_l_gap.text())  # 托盘长边距
+            plt_w_gap = int(self.plt_w_gap.text())  # 托盘宽边距
+
+
+            L = L - plt_l_gap
+            W = W - plt_w_gap
+
             # 获取箱规长宽高对应的列编号，从0开始
             # print('in function calculateDF')
             # print('箱长列： ', self.length_col.text())
@@ -115,18 +143,24 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             ctn_w_col = self.df.columns[int(self.width_col.text())]
             ctn_h_col = self.df.columns[int(self.height_col.text())]
 
+
             # 判断数据中箱的长宽高尺寸单位, 托盘尺寸为cm
-            if self.mm_radiobtn.isChecked() == True:
+            if self.mm_radio_btn.isChecked() == True:
                 L = L*10
                 W = W*10
                 H = H*10
 
-            ctn_num_col = self.df.columns[int(self.carton_col.text())]
+            pltVol = L*W*H
+            # print('L,W,H: ', L,W,H,  pltVol)
+
+            ctn_num_col = self.df.columns[int(self.cartonNum_col.text())]
 
             # print('df[ctn_num_col]: ', self.df[ctn_num_col])
 
+
             self.df['num1'] = np.floor(L / self.df[ctn_l_col]) * np.floor(W / self.df[ctn_w_col]) + \
                            np.floor((L - np.floor(L / self.df[ctn_l_col]) * self.df[ctn_l_col]) / self.df[ctn_w_col]) * np.floor(W / self.df[ctn_l_col])
+
 
             self.df['num2'] = np.floor(W / self.df[ctn_l_col]) * np.floor(L / self.df[ctn_w_col]) + \
                            np.floor((W - np.floor(W / self.df[ctn_l_col]) * self.df[ctn_l_col]) / self.df[ctn_w_col]) * np.floor(L / self.df[ctn_l_col])
@@ -135,11 +169,41 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
             self.df['层数'] = np.floor( H/self.df[ctn_h_col])
 
-
-
             self.df['托规(箱)'] = self.df['每层箱数'] * self.df['层数']
 
-            self.df['托数'] = self.df[ctn_num_col] / self.df['托规(箱)']
+            '''
+            判断是否需要计算托重
+            '''
+
+            # 获取箱重对应的列编号， or  获取单sku重和件箱规对应的列编号, 若两组都不为空，以箱重计算
+            if self.sku_wt_col.text().isdigit() and self.fullCartonQty_col.text().isdigit():
+                # 获取列名
+                sku_wt_col = self.df.columns[int(self.sku_wt_col.text())]
+                fullCartonQty_col = self.df.columns[int(self.fullCartonQty_col.text())]
+
+                # 判断数据中重量单位, 转化为kg, 默认为kg
+                if self.g_radio_btn.isChecked() == True:
+                    self.df['托重(kg)'] = self.df['托规(箱)'] * self.df[sku_wt_col] * self.df[fullCartonQty_col] * 1000
+                else:
+                    self.df['托重(kg)'] = self.df['托规(箱)'] * self.df[sku_wt_col] * self.df[fullCartonQty_col]
+
+            elif self.ctn_wt_col.text().isdigit():
+
+                ctn_wt_col = self.df.columns[int(self.ctn_wt_col.text())]
+
+                # 判断数据中重量单位, 转化为kg, 默认为kg
+                if self.g_radio_btn.isChecked() == True:
+                    self.df['托重(kg)'] = self.df['托规(箱)'] * self.df[ctn_wt_col] / 1000
+                else:
+                    self.df['托重(kg)'] = self.df['托规(箱)'] * self.df[ctn_wt_col]
+            else:
+                pass
+
+
+            self.df['码托高度'] = self.df['层数'] * self.df[ctn_h_col]
+            self.df['码托利用率'] = (self.df['托规(箱)']*self.df[ctn_l_col]*self.df[ctn_w_col]*self.df[ctn_h_col]/pltVol).apply(lambda x: format(x, '.2%'))
+
+            self.df['托数'] = (self.df[ctn_num_col] / self.df['托规(箱)']).apply(lambda x: format(x, '.2f')) 
             self.df['整托数'] = np.floor(self.df[ctn_num_col] / self.df['托规(箱)'])
             self.df['散箱数'] = self.df[ctn_num_col] - self.df['整托数']*self.df['托规(箱)']
 
@@ -154,16 +218,18 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.show_info_dialog('计算完成！')
 
 
-
     def get_layer(self, L, W):
         l = int(self.ctn_length.text())
         w = int(self.ctn_width.text())
 
-        l_num = np.floor(L / l)  # 托盘长边方向的摆放数
-        w_num = np.floor(W / w)  # 托盘短边方向的摆放数
+        ctn_gap = int(self.ctn_gap.text())
+        l = l + ctn_gap
 
-        rmd_l_num = np.floor((L - np.floor(L / l) * l) / w)  # 托盘长边方向的剩余摆放数
-        rmd_w_num = np.floor(W / l)  # 托盘短边方向的剩余摆放数
+        l_num = int(L / l)  # 托盘长边方向的摆放数
+        w_num = int(W / w)  # 托盘短边方向的摆放数
+
+        rmd_l_num = int((L - int(L / l) * l) / w)  # 托盘长边方向的剩余摆放数
+        rmd_w_num = int(W / l)  # 托盘短边方向的剩余摆放数
 
         layer = l_num * w_num + rmd_l_num * rmd_w_num
         return layer
@@ -177,16 +243,37 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.ctn_width.clear()
         self.ctn_height.clear()
 
+        self.plt_l_gap.setText('0')
+        self.plt_w_gap.setText('0')
+        self.ctn_gap.setText('0')
+
         self.resultText1.clear()
 
 
     def show_palletize(self):
 
-        pltSize = (int(self.plt_length.text()), int(self.plt_width.text()), int(self.plt_height.text()))
-        ctnSize = (int(self.ctn_length.text()), int(self.ctn_width.text()), int(self.ctn_height.text()))
+        # 托盘尺寸
+        L = int(self.plt_length.text())  # 托盘长
+        W = int(self.plt_width.text())  # 托盘宽
+        H = int(self.plt_height.text())  # 托盘高
 
-        print('in show pltsize: ', pltSize)
-        print('in show ctnSize: ', ctnSize)
+        plt_l_gap = int(self.plt_l_gap.text())  # 托盘长边距
+        plt_w_gap = int(self.plt_w_gap.text())  # 托盘宽边距
+
+        L = L - plt_l_gap
+        W = W - plt_w_gap
+
+        # 箱尺寸
+        l = int(self.ctn_length.text())
+        w = int(self.ctn_width.text())
+        h = int(self.ctn_height.text())
+
+        ctn_gap = int(self.ctn_gap.text())
+        l = l + ctn_gap
+
+        pltSize = (L, W, H)
+        ctnSize = (l, w, h)
+
         draw = Draw(pltSize, ctnSize)
         draw.run()
 
@@ -204,11 +291,15 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.df = pd.read_csv(filename, encoding='utf-8')
             except:
                 self.df = pd.read_csv(filename, encoding='gbk')
-            model = dfModel(self.df)
+            # 删除有空值的行
+            self.df.dropna(how='any', inplace=True)
+            model = dfModel(self.df.head(100))
             self.tableView.setModel(model)
         elif 'xlsx' in filename:
             self.df = pd.read_excel(filename)
-            model = dfModel(self.df)
+            # 删除有空值的行
+            self.df.dropna(how='any', inplace=True)
+            model = dfModel(self.df.head(100))
             self.tableView.setModel(model)
         else:
             self.show_error_dialog('请选择csv或xlsx文件类型!')
@@ -216,7 +307,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def save_data(self):
         filePath, ok2 = QFileDialog.getSaveFileName(None, caption='保存文件', filter='Excel files(*.xlsx , *.xls, *.csv)')
         # print(filePath)  # 打印保存文件的全部路径（包括文件名和后缀名）
-        self.df.to_csv(filePath, index=False)
+        if 'csv' in filePath:
+            self.df.to_csv(filePath, index=False)
+        elif 'xls' in filePath:
+            self.df.to_excel(filePath, sheet_name='垛型分析', index=False)
+        else:
+            self.show_info_dialog('请保存为指定的文件类型！')
 
     def clear_all(self):
         # print('in clear_all function')
@@ -229,6 +325,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def show_info_dialog(self, msg):
         QMessageBox.information(self, '消息', msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+
+    def resource_path(self, relative_path):
+        '''将相对路径转为运行时资源文件的绝对路径'''
+        if hasattr(sys, '_MEIPASS'):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.abspath('.')
+        return os.path.join(base_path, relative_path)
 
 class dfModel(QAbstractTableModel):
 
@@ -293,7 +397,7 @@ class Draw():
         B2 = self.surplus(Plan1[0], B, 'ab')
 
         # 把剩下的货物再次尝试装箱，针对三个在轴线上的点为新的原点
-        self.twice(show_num, 'blue', Plan1[2], self.pltSize, B2)
+        self.twice(show_num, 'orange', Plan1[2], self.pltSize, B2)
 
         self.make_pic(show_num)
 
@@ -384,7 +488,7 @@ class Draw():
                                 #保证放入的可用点是不重复的
                                 if new_O not in O_items:
                                     O_items.append(new_O)
-        return self.fullPalletNum, O_items,O_pop
+        return self.fullPalletNum, O_items, O_pop
 
     #<<<---写一个函数专门用来调整方向和计算剩余货物
     def surplus(self, num,Box_list,change):#change='ab','bc','ac',0有三组对调可能，共6种朝向
@@ -423,7 +527,8 @@ class Draw():
 if __name__ == "__main__":
 
     app = QApplication(sys.argv)
-    app.setWindowIcon(QIcon('./images/goodcang.ico'))
     ui = MainWindow()
+    icon = ui.resource_path(os.path.join('images', 'goodcang.ico'))
+    app.setWindowIcon(QIcon(icon))
     ui.show()
     sys.exit(app.exec_())

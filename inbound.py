@@ -24,10 +24,10 @@ def load_inbound_data(file_path, inventory_fileName):
     ### 交互界面，输入EIQ分析的有效字段编号
     print('\n')
     print('请按以下字段顺序输入 入库明细 对应的列号：（列号从0开始，以空格隔开以enter结束）')
-    print('收货日期 最早签收日期 入库单号 入库单类型 货运方式 海柜号 跟踪号 客户代码 箱号 产品代码 产品货型 收货数量 收货体积')
+    print('收货日期 最早签收日期 入库单号 入库单类型 货运方式 海柜号 跟踪号 客户代码 箱号 产品代码 产品货型 收货数量 收货体积 物理仓编码')
 
     # column_index = [int(x) for x in input().split()]
-    detail_index = [16, 8, 6, 7, 3, 14, 20, 10, 17, 4, 19, 24, 21]
+    detail_index = [16, 8, 6, 7, 3, 14, 20, 10, 17, 4, 19, 24, 21, 15]
     column_name = data.columns.tolist()
 
     # print('column_index: ', detail_index)
@@ -40,7 +40,7 @@ def load_inbound_data(file_path, inventory_fileName):
 
     detail_data = data[detail_columns]
     valid_columns_name = ['date', 'receive_time','inboundID', 'inbound_type', 'delivery_mode', 'containerNO', 'trackingNO',
-                          'customer', 'cartonNO', 'sku', 'sku_size', 'quantity', 'Vol(m³)']
+                          'customer', 'cartonNO', 'sku', 'sku_size', 'quantity', 'Vol(m³)', 'wh_code']
     detail_data.columns = valid_columns_name
 
     ### 日期列转化为Python日期格式
@@ -48,6 +48,8 @@ def load_inbound_data(file_path, inventory_fileName):
     detail_data['receive_time'] = pd.to_datetime(detail_data['receive_time'])
     detail_data['receive_date'] = detail_data['receive_time'].dt.date
     detail_data['month'] = detail_data['date'].dt.month
+    detail_data['weekday'] = detail_data['date'].dt.weekday
+
 
     detail_data['deliveryNO'] = detail_data['containerNO']
     detail_data.loc[(detail_data['containerNO'].str.len()<=1), ['deliveryNO']] = detail_data['trackingNO']
@@ -74,12 +76,11 @@ def inbound_analyse(df, output_path):
     print(df.head(10))
 
     '''C01 入库货型分布'''
-
-    inbound_dist_df = get_inbound_distribution(df, period=['2022-02-15', '2022-03-01'])
-
+    period = ['2022-02-01', '2022-03-01']
+    inbound_dist_df, inbound_info1 = get_inbound_distribution(df, period=period)
 
     ''' C02 入库箱型及SKU分布'''
-    carton_df, sku_df, daily_container_df = get_carton_distribution(df, period=['2022-02-15', '2022-03-01'])
+    carton_df, sku_df, daily_container_df, inbound_info2 = get_carton_distribution(df, period=period)
 
     '''
     计算结果写入Excel表格
@@ -89,10 +90,10 @@ def inbound_analyse(df, output_path):
     str_time = time.strftime('%Y_%m_%d_%H_%M')
     writer = pd.ExcelWriter('{}入库分析_{}.xlsx'.format(output_path, str_time))
 
-    format_data(writer=writer, df=inbound_dist_df, sheet_name='C01-入库货型')
-    format_data(writer=writer, df=carton_df, sheet_name='C02-箱型分布')
-    format_data(writer=writer, df=sku_df, sheet_name='C03-单箱SKU分布')
-    format_data(writer=writer, df=daily_container_df, sheet_name='C04-日来柜数量')
+    format_data(writer=writer, df=inbound_dist_df, sheet_name='C1-入库货型', source_data_info=inbound_info1)
+    format_data(writer=writer, df=carton_df, sheet_name='C2-箱型分布', source_data_info=inbound_info2)
+    format_data(writer=writer, df=sku_df, sheet_name='C3-单箱SKU分布', source_data_info=inbound_info2)
+    format_data(writer=writer, df=daily_container_df, sheet_name='C4-日来柜数量', source_data_info=inbound_info2)
 
     writer.save()
 
@@ -101,20 +102,29 @@ def get_inbound_distribution(df, month=None, date=None, period=None):
     '''
     计算海柜及跟踪号的件型分布
     '''
-    index = ['deliveryNO', 'delivery_mode']
+    index = ['month', 'date', 'deliveryNO', 'delivery_mode']
+
+
+    '''数据源基础信息'''
+    if '物理仓编码' in df.columns:
+        wh_code = df.at[1, '物理仓编码']
+    elif 'wh_code' in df.columns:
+        wh_code = df.at[1, 'wh_code']
+    elif '物理仓代码' in df.columns:
+        wh_code = df.at[1, '物理仓代码']
+    elif '物理仓' in df.columns:
+        wh_code = df.at[1, '物理仓']
+    else:
+        wh_code = ''
+    old_shape = df.shape
 
     if month is not None:
         df = df.query('month == {}'.format(month))
-        index = ['month'] + index
     elif date is not None:
         df = df.query('date == "{}"'.format(date))
-        index = ['date'] + index
     elif period is not None:
         if len(period) == 2:
             df = df.query('date >= "{}" & date <= "{}"'.format(period[0], period[1]))
-            index = ['date'] + index
-    else:
-        pass
 
     sort_size = ['XL', 'L2', 'L1', 'M', 'S', 'XS']
     df['sku_size'] = pd.Categorical(df['sku_size'], sort_size)
@@ -150,27 +160,50 @@ def get_inbound_distribution(df, month=None, date=None, period=None):
     for item in sort_size:
         delivery_df[('quantity_{}%'.format(item))] = delivery_df[('quantity_{}'.format(item))] / delivery_df[('quantity_All')]
 
+    delivery_df = delivery_df.sort_values(by=['date'])
+
     print(delivery_df.dtypes)
     print('delivery_df.shape ', delivery_df.shape)
     print(delivery_df.head(10))
 
-    return delivery_df
+    new_shape = df.shape
+
+    days = df['date'].dt.date.nunique()
+    start_date = df['date'].dt.date.min()
+    end_date = df['date'].dt.date.max()
+
+    inbound_info = '''数据源
+        物理仓: {}, 原始数据: 行数 {}, 列数 {};  
+        分析天数: {}, 开始日期: {}, 结束日期: {}; 
+        分析数量: 行数 {}, 列数{}
+        '''.format(wh_code, old_shape[0], old_shape[1], days, start_date, end_date, new_shape[0], new_shape[1])
+
+    return delivery_df, inbound_info
 
 
 def get_carton_distribution(df, month=None, date=None, period=None):
-    index = ['cartonNO']
+    index = ['month', 'weekday', 'date', 'cartonNO']
+
+    '''数据源基础信息'''
+    if '物理仓编码' in df.columns:
+        wh_code = df.at[1, '物理仓编码']
+    elif 'wh_code' in df.columns:
+        wh_code = df.at[1, 'wh_code']
+    elif '物理仓代码' in df.columns:
+        wh_code = df.at[1, '物理仓代码']
+    elif '物理仓' in df.columns:
+        wh_code = df.at[1, '物理仓']
+    else:
+        wh_code = ''
+    old_shape = df.shape
+
     if month is not None:
         df = df.query('month == {}'.format(month))
-        index = ['month'] + index
     elif date is not None:
         df = df.query('date == "{}"'.format(date))
-        index = ['date'] + index
     elif period is not None:
         if len(period) == 2:
             df = df.query('date >= "{}" & date <= "{}"'.format(period[0], period[1]))
-            index = ['date'] + index
-    else:
-        pass
 
     carton_df = pd.pivot_table(df, index=index,
                                values=['quantity', 'sku'],
@@ -183,7 +216,7 @@ def get_carton_distribution(df, month=None, date=None, period=None):
     carton_df.loc[(carton_df['quantity'] > 1) & (carton_df['sku'] == 1), ['carton_type']] = '单箱单品'
     carton_df.loc[(carton_df['quantity'] > 1) & (carton_df['sku'] > 1), ['carton_type']] = '单箱多品'
 
-    print('carton_type value count: ', df)
+    # print('carton_type value count: ', df)
 
     carton_df['sku_type'] = carton_df['sku'].astype(np.str) + 'SKU'
     carton_df.loc[(carton_df['sku'] > 10), ['sku_type']] = '>10SKU'
@@ -197,7 +230,8 @@ def get_carton_distribution(df, month=None, date=None, period=None):
 
 
     '''箱型分布'''
-    carton_type_pivot = pd.pivot_table(df, index=['deliveryNO', 'delivery_mode'],
+    carton_index = ['month', 'weekday', 'date',  'deliveryNO', 'delivery_mode']
+    carton_type_pivot = pd.pivot_table(df, index=carton_index,
                                    values=['Vol(m³)', 'cartonNO', 'quantity'],
                                    columns=['carton_type'],
                                    aggfunc={'Vol(m³)':np.sum, 'cartonNO':pd.Series.nunique, 'quantity':np.mean},
@@ -232,7 +266,7 @@ def get_carton_distribution(df, month=None, date=None, period=None):
 
 
     '''箱内SKU分布'''
-    sku_index = ['deliveryNO', 'delivery_mode']
+    sku_index = ['date', 'weekday', 'deliveryNO', 'delivery_mode']
     sku_type_pivot = pd.pivot_table(df, index=sku_index,
                                    values=['cartonNO'],
                                    columns=['sku_type'],
@@ -247,17 +281,9 @@ def get_carton_distribution(df, month=None, date=None, period=None):
             sku_type_col.append(s1)
     sku_type_pivot.columns = sku_type_col
 
+    pt_col = sku_type_pivot.columns[len(sku_index):]
     # 增加总箱数
-    sku_type_pivot['总箱数'] = sku_type_pivot.sum(axis=1)
-
-    ### 最早签收时间
-    earliest_time = pd.pivot_table(df, index=['deliveryNO'],
-                                   values=['receive_date'],
-                                   aggfunc=np.min,
-                                   fill_value=0).reset_index()
-
-    sku_type_pivot = pd.merge(sku_type_pivot, earliest_time, on=['deliveryNO'], how='left')
-    sku_type_pivot = sku_type_pivot.sort_values(by='receive_date', ignore_index=True)
+    sku_type_pivot['总箱数'] = sku_type_pivot[pt_col].sum(axis=1)
 
 
 
@@ -278,10 +304,20 @@ def get_carton_distribution(df, month=None, date=None, period=None):
     daily_container_df['receive_interval_days'] = pd.to_timedelta(daily_container_df['receive_date'] - daily_container_df['receive_date'].shift(1)).dt.days
 
     daily_container_df = daily_container_df.fillna(0)
-
-
     # print(sku_type_pivot.dtypes)
     # print(sku_type_pivot.shape)
     # print(sku_type_pivot.head(10))
 
-    return carton_type_pivot, sku_type_pivot, daily_container_df
+    new_shape = df.shape
+    days = df['date'].dt.date.nunique()
+    start_date = df['date'].dt.date.min()
+    end_date = df['date'].dt.date.max()
+
+    inbound_info = '''数据源\n 物理仓: {}, 原始数据: 行数 {}, 列数 {};  
+           分析天数: {}, 开始日期: {}， 结束日期: {}; 
+           分析数量: 行数 {}, 列数{}
+           '''.format(wh_code, old_shape[0], old_shape[1], days, start_date, end_date, new_shape[0], new_shape[1])
+
+    return carton_type_pivot, sku_type_pivot, daily_container_df, inbound_info
+
+
