@@ -422,6 +422,18 @@ class Draw():
         ax.xaxis.set_major_locator(MultipleLocator(50))
         ax.yaxis.set_major_locator(MultipleLocator(50))
         ax.zaxis.set_major_locator(MultipleLocator(50))
+
+        # 设置坐标轴最大刻度
+        Xmax = (max(self.pltSize)/10+1)*10
+
+        ax.set_xlim3d(0, Xmax)
+        ax.set_ylim3d(0, Xmax)
+        ax.set_zlim3d(0, Xmax)
+
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+
         for num in Items:
             self.box(ax,num[0],num[1],num[2],num[3],num[4],num[5],num[6])
         # plt.title('Palletize Model')
@@ -440,7 +452,8 @@ class Draw():
         O2 = (O[0],O[1]+B_i[1],O[2])
         # 在Z轴方向上生成
         O3 = (O[0],O[1],O[2]+B_i[2])
-        return [O1,O2,O3]
+        # return [O1,O2,O3]
+        return [O3, O2, O1]
 
     #3.拟人化依次堆叠方体
     def packing3D(self, show_num,color,O,C,Box_list):
